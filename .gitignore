@@ -129,5 +129,5 @@ pyvenv.cfg
 pip-selfcheck.json
 
 *example_*
-
+.DS_Store
 # End of https://www.toptal.com/developers/gitignore/api/pycharm,venv
