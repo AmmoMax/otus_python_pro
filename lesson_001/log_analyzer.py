@@ -6,20 +6,24 @@
 #                     '$status $body_bytes_sent "$http_referer" '
 #                     '"$http_user_agent" "$http_x_forwarded_for" "$http_X_REQUEST_ID" "$http_X_RB_USER" '
 #                     '$request_time';
+import dataclasses
 import datetime
 import gzip
 import re
 import statistics
+import time
 from collections import namedtuple, defaultdict, Counter
+from enum import Enum
 from pathlib import Path
 from pprint import pprint
 from typing import Generator
 
-config = {
-    "REPORT_SIZE": 1000,
-    "REPORT_DIR": "./reports",
-    "LOG_DIR": "./log"
-}
+
+@dataclasses.dataclass
+class DefaultConfig:
+    REPORT_SIZE: int = 10
+    REPORT_DIR: str = "./reports"
+    LOG_DIR: str = "./log"
 
 
 
@@ -51,19 +55,14 @@ def find_latest_logfile(log_dir: str) -> namedtuple:
 
 
 def read_log_line(log_path: str):
-    with(gzip.open(log_path, 'rb') if log_path.endswith('gz') else open(log_path)) as log:
-        total_line = proceed = 0
-        for line in log:
-            yield line
+    """Читает построчно лог и возвращает генератор"""
+    with(gzip.open(log_path, 'rb') if log_path.endswith('gz') else open(log_path)) as file:
+        for common_line in file:
+            log_parts = common_line.split(' ')
+            yield log_parts[7], log_parts[-1]
 
-def log_parser(log_line: Generator):
-    """Парсит строку лога и возвращает url и request_time"""
-    for line in log_line:
-        log_parts = line.split(' ')
-        # TODO: переделать поиск на регулярки?
-        yield log_parts[7], log_parts[-1]
 
-def build_report(log_parser: Generator):
+def prepare_data_for_report(log_parser: Generator, config:DefaultConfig):
     """Собирает структуру для отчета.
     Конечная структура - список из словарей
     [{"count": 2767, "time_avg": 62.994999999999997,
@@ -71,7 +70,7 @@ def build_report(log_parser: Generator):
     "url": "/api/v2/internal/html5/phantomjs/queue/?wait=1m", "time_med": 60.073,
     "time_perc": 9.0429999999999993, "count_perc": 0.106}]
     """
-    all_req_time = []
+    all_req_time = 0
     report_dict = defaultdict(dict)
     for url, request_time in log_parser:
         request_time = float(request_time)
@@ -82,7 +81,7 @@ def build_report(log_parser: Generator):
         else:
             report_dict[url]['count'].update((url,))
             report_dict[url]['req_time'].append(request_time)
-        all_req_time.append(request_time)
+        all_req_time += request_time
 
     common_request_count = len(report_dict.keys())
 
@@ -98,17 +97,25 @@ def build_report(log_parser: Generator):
             'time_max': max(req_time_list),
             'time_med': statistics.median(req_time_list),
             'count_perc': data['count'][url] / common_request_count * 100,
-            'time_perc': time_sum / sum(all_req_time) * 100
+            'time_perc': time_sum / all_req_time * 100
         }
         report_list.append(current_url_data)
-    return report_list
+    report_list.sort(key=lambda url_report: url_report['time_max'], reverse=True)
+    return report_list[:config.REPORT_SIZE]
 
+def build_report(report_data):
+    pass
+    # report_name =
 
 def main():
-     latest_log = find_latest_logfile("log")
-     log = read_log_line(latest_log.path)
-     lines = log_parser(log)
-     pprint(build_report(lines))
+    config = DefaultConfig()
+    start = time.perf_counter()
+    latest_log = find_latest_logfile("log")
+    lines = read_log_line(latest_log.path)
+    report_data = prepare_data_for_report(lines, config)
+    pprint(report_data)
+    print(time.perf_counter() - start)
+
 
 if __name__ == "__main__":
     main()
