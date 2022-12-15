@@ -9,22 +9,15 @@
 import dataclasses
 import datetime
 import gzip
+import os
 import re
 import statistics
 import time
 from collections import namedtuple, defaultdict, Counter
-from enum import Enum
 from pathlib import Path
 from pprint import pprint
-from typing import Generator
-
-
-@dataclasses.dataclass
-class DefaultConfig:
-    REPORT_SIZE: int = 10
-    REPORT_DIR: str = "./reports"
-    LOG_DIR: str = "./log"
-
+from string import Template
+from typing import Generator, List
 
 
 def find_latest_logfile(log_dir: str) -> namedtuple:
@@ -48,21 +41,22 @@ def find_latest_logfile(log_dir: str) -> namedtuple:
             delta = now - file_datetime
             ActualLogFile.path = file.as_posix()
             ActualLogFile.delta = delta.days
-            ActualLogFile.date = match
+            ActualLogFile.date = datetime.datetime.strptime(match[0], '%Y%m%d')
             res_log_files.append(ActualLogFile)
     latest = min(res_log_files, key=lambda x: x.delta)
     return latest
 
 
 def read_log_line(log_path: str):
-    """Читает построчно лог и возвращает генератор"""
+    """Читает построчно лог и возвращает генератор c url и req_time"""
     with(gzip.open(log_path, 'rb') if log_path.endswith('gz') else open(log_path)) as file:
         for common_line in file:
             log_parts = common_line.split(' ')
+            # TODO: переделать на регулярки
             yield log_parts[7], log_parts[-1]
 
 
-def prepare_data_for_report(log_parser: Generator, config:DefaultConfig):
+def prepare_data_for_report(log_parser: Generator, report_size: int):
     """Собирает структуру для отчета.
     Конечная структура - список из словарей
     [{"count": 2767, "time_avg": 62.994999999999997,
@@ -101,19 +95,39 @@ def prepare_data_for_report(log_parser: Generator, config:DefaultConfig):
         }
         report_list.append(current_url_data)
     report_list.sort(key=lambda url_report: url_report['time_max'], reverse=True)
-    return report_list[:config.REPORT_SIZE]
+    return report_list[:report_size]
 
-def build_report(report_data):
-    pass
-    # report_name =
+
+def get_config():
+    """Возвращает конфиг либо полученный в аргументах при запуске, либо по-умолчанию"""
+
+    @dataclasses.dataclass
+    class DefaultConfig:
+        REPORT_SIZE: int = 10
+        REPORT_DIR: str = "./reports"
+        LOG_DIR: str = "./log"
+
+    return DefaultConfig()
+
+def build_report(report_data: List[dict], report_date: datetime, report_path: str):
+    """Создает и заполняет файл отчета из html шаблона"""
+    with open('report.html') as file:
+        report_file = file.read()
+    s = Template(report_file)
+    final_report = s.safe_substitute(table_json=report_data)
+    report_name = f'report-{report_date.strftime("%Y.%m.%d")}.html'
+    final_report_path = Path(report_path).joinpath(report_name)
+    os.makedirs(report_path, exist_ok=True)
+    with open(str(final_report_path), 'w') as file:
+        file.write(final_report)
 
 def main():
-    config = DefaultConfig()
+    config = get_config()
     start = time.perf_counter()
-    latest_log = find_latest_logfile("log")
+    latest_log = find_latest_logfile(config.LOG_DIR)
     lines = read_log_line(latest_log.path)
-    report_data = prepare_data_for_report(lines, config)
-    pprint(report_data)
+    report_data = prepare_data_for_report(lines, config.REPORT_SIZE)
+    build_report(report_data, latest_log.date, config.REPORT_DIR)
     print(time.perf_counter() - start)
 
 
