@@ -8,6 +8,7 @@
 #                     '$request_time';
 import dataclasses
 import datetime
+import functools
 import gzip
 import os
 import re
@@ -18,6 +19,15 @@ from pathlib import Path
 from pprint import pprint
 from string import Template
 from typing import Generator, List
+
+
+def micro_time_counter(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = time.perf_counter()
+        func(*args, **kwargs)
+        print(f'We are slowpoke in : {time.perf_counter() - start_time}')
+    return wrapper
 
 
 def find_latest_logfile(log_dir: str) -> namedtuple:
@@ -117,19 +127,30 @@ def build_report(report_data: List[dict], report_date: datetime, report_path: st
     final_report = s.safe_substitute(table_json=report_data)
     report_name = f'report-{report_date.strftime("%Y.%m.%d")}.html'
     final_report_path = Path(report_path).joinpath(report_name)
-    os.makedirs(report_path, exist_ok=True)
-    with open(str(final_report_path), 'w') as file:
-        file.write(final_report)
+    if not os.path.isfile(final_report_path):
+        os.makedirs(report_path, exist_ok=True)
+        with open(str(final_report_path), 'w') as file:
+            file.write(final_report)
+    else:
+        print(f'Report file {report_name} has already exist to path {final_report_path}')
 
+def check_report_exist(report_date: datetime, report_path: str):
+    """Проверяет существование отчета по дате"""
+    report_name = f'report-{report_date.strftime("%Y.%m.%d")}.html'
+    final_report_path = Path(report_path).joinpath(report_name)
+    return os.path.isfile(final_report_path)
+
+@micro_time_counter
 def main():
     config = get_config()
-    start = time.perf_counter()
-    latest_log = find_latest_logfile(config.LOG_DIR)
-    lines = read_log_line(latest_log.path)
-    report_data = prepare_data_for_report(lines, config.REPORT_SIZE)
-    build_report(report_data, latest_log.date, config.REPORT_DIR)
-    print(time.perf_counter() - start)
 
+    latest_log = find_latest_logfile(config.LOG_DIR)
+    if not check_report_exist(latest_log.date, config.REPORT_DIR):
+        lines = read_log_line(latest_log.path)
+        report_data = prepare_data_for_report(lines, config.REPORT_SIZE)
+        build_report(report_data, latest_log.date, config.REPORT_DIR)
+    else:
+        print(f'Report for latest log is existing. Try to see in {config.REPORT_DIR}')
 
 if __name__ == "__main__":
     main()
