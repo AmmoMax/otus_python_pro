@@ -6,6 +6,8 @@
 #                     '$status $body_bytes_sent "$http_referer" '
 #                     '"$http_user_agent" "$http_x_forwarded_for" "$http_X_REQUEST_ID" "$http_X_RB_USER" '
 #                     '$request_time';
+import argparse
+import configparser
 import dataclasses
 import datetime
 import functools
@@ -13,10 +15,10 @@ import gzip
 import os
 import re
 import statistics
+import sys
 import time
 from collections import namedtuple, defaultdict, Counter
 from pathlib import Path
-from pprint import pprint
 from string import Template
 from typing import Generator, List
 
@@ -26,7 +28,7 @@ def micro_time_counter(func):
     def wrapper(*args, **kwargs):
         start_time = time.perf_counter()
         func(*args, **kwargs)
-        print(f'We are slowpoke in : {time.perf_counter() - start_time}')
+        print(f'We are slowpoke in : {time.perf_counter() - start_time:.3}s')
     return wrapper
 
 
@@ -59,11 +61,28 @@ def find_latest_logfile(log_dir: str) -> namedtuple:
 
 def read_log_line(log_path: str):
     """Читает построчно лог и возвращает генератор c url и req_time"""
+    error_line_counter = 0
+    total_line_counter = 0
+    error_threshold = 0.00001
     with(gzip.open(log_path, 'rb') if log_path.endswith('gz') else open(log_path)) as file:
         for common_line in file:
             log_parts = common_line.split(' ')
-            # TODO: переделать на регулярки
-            yield log_parts[7], log_parts[-1]
+            url = log_parts[7]
+            req_time = log_parts[-1]
+
+            url_reg = re.compile(r'^\/([a-zA-Z0-9]+\/)*([^\s])+')
+            req_time_reg = re.compile(r'\d\.\d+')
+
+            if not re.fullmatch(url_reg, url) and not re.fullmatch(req_time_reg, req_time):
+                error_line_counter += 1
+                parsing_errors = error_line_counter / total_line_counter
+                if parsing_errors  > error_threshold:
+                    print(f'Error threshold: {error_threshold} exceeded. Stop parsing and exit!')
+                    raise EOFError('Error threshold exceeded!')
+                continue
+            total_line_counter += 1
+            yield url, req_time
+
 
 
 def prepare_data_for_report(log_parser: Generator, report_size: int):
@@ -117,11 +136,32 @@ def get_config():
         REPORT_DIR: str = "./reports"
         LOG_DIR: str = "./log"
 
-    return DefaultConfig()
+        def __post_init__(self):
+            # потому что параметры в ini конфиге читаются как строки
+            self.REPORT_SIZE = int(self.REPORT_SIZE)
 
-def build_report(report_data: List[dict], report_date: datetime, report_path: str):
+    parser = argparse.ArgumentParser(description='Parse and generate report for nginx latest log.')
+    parser.add_argument('--config', help='Path to .ini config file', default='config.ini')
+    args = parser.parse_args()
+
+    config = configparser.ConfigParser()
+    if not os.path.exists(args.config):
+        print(f'Config file not found by path: {args.config}')
+        raise FileNotFoundError
+
+    config.read(args.config)
+
+    try:
+        common_config = DefaultConfig(**{k.upper(): v for k, v in config['config_params'].items()})
+    except KeyError as error:
+        print(f'It is not valid config file! RTFM please! Error: {error}')
+        raise
+    return common_config
+
+
+def build_report(report_data: List[dict], report_date: datetime, report_path: str, report_template: str='report.html'):
     """Создает и заполняет файл отчета из html шаблона"""
-    with open('report.html') as file:
+    with open(report_template) as file:
         report_file = file.read()
     s = Template(report_file)
     final_report = s.safe_substitute(table_json=report_data)
@@ -134,23 +174,28 @@ def build_report(report_data: List[dict], report_date: datetime, report_path: st
     else:
         print(f'Report file {report_name} has already exist to path {final_report_path}')
 
+
 def check_report_exist(report_date: datetime, report_path: str):
     """Проверяет существование отчета по дате"""
     report_name = f'report-{report_date.strftime("%Y.%m.%d")}.html'
     final_report_path = Path(report_path).joinpath(report_name)
     return os.path.isfile(final_report_path)
 
+
 @micro_time_counter
 def main():
-    config = get_config()
+    try:
+        config = get_config()
 
-    latest_log = find_latest_logfile(config.LOG_DIR)
-    if not check_report_exist(latest_log.date, config.REPORT_DIR):
-        lines = read_log_line(latest_log.path)
-        report_data = prepare_data_for_report(lines, config.REPORT_SIZE)
-        build_report(report_data, latest_log.date, config.REPORT_DIR)
-    else:
-        print(f'Report for latest log is existing. Try to see in {config.REPORT_DIR}')
+        latest_log = find_latest_logfile(config.LOG_DIR)
+        if not check_report_exist(latest_log.date, config.REPORT_DIR):
+            lines = read_log_line(latest_log.path)
+            report_data = prepare_data_for_report(lines, config.REPORT_SIZE)
+            build_report(report_data, latest_log.date, config.REPORT_DIR)
+        else:
+            print(f'Report for latest log is existing. Try to see in {config.REPORT_DIR}')
+    except (FileNotFoundError, EOFError):
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
