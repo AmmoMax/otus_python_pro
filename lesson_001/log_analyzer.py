@@ -12,6 +12,7 @@ import dataclasses
 import datetime
 import functools
 import gzip
+import logging
 import os
 import re
 import statistics
@@ -28,7 +29,7 @@ def micro_time_counter(func):
     def wrapper(*args, **kwargs):
         start_time = time.perf_counter()
         func(*args, **kwargs)
-        print(f'We are slowpoke in : {time.perf_counter() - start_time:.3}s')
+        logging.debug(f'We did it for : {time.perf_counter() - start_time:.3}s')
     return wrapper
 
 
@@ -45,6 +46,12 @@ def find_latest_logfile(log_dir: str) -> namedtuple:
     res_log_files = []
     now = datetime.datetime.now().date()
 
+    logging.info(f'Looking for the latest file on the path: {log_dir}')
+
+    if not files:
+        logging.error(f'Have no log files on the path: {log_dir}')
+        raise FileNotFoundError(f'Have no log files on the path: {log_dir}')
+
     for file in files:
         match = file_name_pattern.findall(file.name)
         if match:
@@ -56,14 +63,17 @@ def find_latest_logfile(log_dir: str) -> namedtuple:
             ActualLogFile.date = datetime.datetime.strptime(match[0], '%Y%m%d')
             res_log_files.append(ActualLogFile)
     latest = min(res_log_files, key=lambda x: x.delta)
+    logging.info(f'Find latest log file on the path: {log_dir}. File name: {latest.path}')
     return latest
 
 
-def read_log_line(log_path: str):
+def read_log_line(log_path: str) -> Generator:
     """Читает построчно лог и возвращает генератор c url и req_time"""
     error_line_counter = 0
     total_line_counter = 0
-    error_threshold = 0.00001
+    # допустимый порог ошибок парсинг лога
+    ERROR_THRESHOLD = 0.2
+
     with(gzip.open(log_path, 'rb') if log_path.endswith('gz') else open(log_path)) as file:
         for common_line in file:
             log_parts = common_line.split(' ')
@@ -75,19 +85,20 @@ def read_log_line(log_path: str):
 
             if not re.fullmatch(url_reg, url) and not re.fullmatch(req_time_reg, req_time):
                 error_line_counter += 1
-                parsing_errors = error_line_counter / total_line_counter
-                if parsing_errors  > error_threshold:
-                    print(f'Error threshold: {error_threshold} exceeded. Stop parsing and exit!')
-                    raise EOFError('Error threshold exceeded!')
                 continue
             total_line_counter += 1
             yield url, req_time
 
+    parsing_errors = error_line_counter / total_line_counter
+    if parsing_errors > ERROR_THRESHOLD:
+        logging.error(f'Error threshold: {ERROR_THRESHOLD} exceeded. Stop parsing and exit!')
+        raise EOFError('Error threshold exceeded!')
 
 
-def prepare_data_for_report(log_parser: Generator, report_size: int):
+def prepare_data_for_report(log_parser: Generator, report_size: int) -> list:
     """Собирает структуру для отчета.
-    Конечная структура - список из словарей
+    Возвращает список из словарей. В каждом словаре собрана статистика по каждому url
+    Пример:
     [{"count": 2767, "time_avg": 62.994999999999997,
     "time_max": 9843.5689999999995, "time_sum": 174306.35200000001,
     "url": "/api/v2/internal/html5/phantomjs/queue/?wait=1m", "time_med": 60.073,
@@ -140,27 +151,35 @@ def get_config():
             # потому что параметры в ini конфиге читаются как строки
             self.REPORT_SIZE = int(self.REPORT_SIZE)
 
+    logging.info(f'Getting config...')
+
     parser = argparse.ArgumentParser(description='Parse and generate report for nginx latest log.')
-    parser.add_argument('--config', help='Path to .ini config file', default='config.ini')
+    parser.add_argument('--config', help='Path to .ini config file', required=False)
     args = parser.parse_args()
 
     config = configparser.ConfigParser()
-    if not os.path.exists(args.config):
-        print(f'Config file not found by path: {args.config}')
-        raise FileNotFoundError
+    if args.config:
+        if not os.path.exists(args.config):
+            logging.error(f'Config file not found by path: {args.config}')
+            raise FileNotFoundError(f'Config file not found by path: {args.config}')
 
-    config.read(args.config)
+        config.read(args.config)
 
-    try:
-        common_config = DefaultConfig(**{k.upper(): v for k, v in config['config_params'].items()})
-    except KeyError as error:
-        print(f'It is not valid config file! RTFM please! Error: {error}')
-        raise
+        try:
+            common_config = DefaultConfig(**{k.upper(): v for k, v in config['config_params'].items()})
+        except KeyError as error:
+            logging.error(f'It is not valid config file! RTFM please! Error: {error}')
+            raise
+    else:
+        common_config = DefaultConfig()
+    logging.info(f'Config received: {common_config.__dict__}')
     return common_config
 
 
 def build_report(report_data: List[dict], report_date: datetime, report_path: str, report_template: str='report.html'):
     """Создает и заполняет файл отчета из html шаблона"""
+    logging.info(f'Building report...')
+
     with open(report_template) as file:
         report_file = file.read()
     s = Template(report_file)
@@ -171,8 +190,9 @@ def build_report(report_data: List[dict], report_date: datetime, report_path: st
         os.makedirs(report_path, exist_ok=True)
         with open(str(final_report_path), 'w') as file:
             file.write(final_report)
+        logging.info(f'Report file was create. You can find it on the path: {final_report_path}')
     else:
-        print(f'Report file {report_name} has already exist to path {final_report_path}')
+        logging.info(f'Report file {report_name} has already exist to path {final_report_path}')
 
 
 def check_report_exist(report_date: datetime, report_path: str):
@@ -184,6 +204,10 @@ def check_report_exist(report_date: datetime, report_path: str):
 
 @micro_time_counter
 def main():
+    format = '[%(asctime)s] %(levelname).1s %(message)s'
+    logging.basicConfig(format=format, level=logging.DEBUG, datefmt='%Y.%m.%d %H:%M:%S')
+
+    logging.debug(f'Starting to parse file!')
     try:
         config = get_config()
 
@@ -193,7 +217,7 @@ def main():
             report_data = prepare_data_for_report(lines, config.REPORT_SIZE)
             build_report(report_data, latest_log.date, config.REPORT_DIR)
         else:
-            print(f'Report for latest log is existing. Try to see in {config.REPORT_DIR}')
+            logging.info(f'Report for latest log is existing. Try to see in {config.REPORT_DIR}')
     except (FileNotFoundError, EOFError):
         sys.exit(1)
 
