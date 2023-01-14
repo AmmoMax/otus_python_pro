@@ -17,7 +17,9 @@ import os
 import re
 import statistics
 import sys
+import tempfile
 import time
+import unittest
 from collections import namedtuple, defaultdict, Counter
 from pathlib import Path
 from string import Template
@@ -201,6 +203,47 @@ def check_report_exist(report_date: datetime, report_path: str):
     final_report_path = Path(report_path).joinpath(report_name)
     return os.path.isfile(final_report_path)
 
+### STARTING TESTS
+class FindLatestLogfileTestCase(unittest.TestCase):
+    """Тест кейсы для функции find_latest_logfile"""
+    def test_return_tuple_existing_fields(self):
+        """Проверяет наличие полей у path, delta, date в результате выполнения функции"""
+        real_log_file_path = './log'
+        res_tuple = find_latest_logfile(real_log_file_path)
+        self.assertTrue(hasattr(res_tuple, 'path'))
+        self.assertTrue(hasattr(res_tuple, 'delta'))
+        self.assertTrue(hasattr(res_tuple, 'date'))
+
+    def test_not_existing_file_path(self):
+        """Проверяет что возвращается исключение FileNotFound в случае если по пути нет файлов с логами"""
+        real_log_file_path = './test_log'
+        self.assertRaises(FileNotFoundError, find_latest_logfile, real_log_file_path)
+
+class ReadLogFileTestCase(unittest.TestCase):
+    """Тест-кейсы для функции read_log_line"""
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Создает временный файл с валидным логом для теста"""
+        cls.log_file_str = """1.195.44.0 -  - [30/Jun/2017:03:27:11 +0300] "GET /api/v2" 200 12 "-" "-" "-" "1498782431-1775774396-4709-10705639" "0d9e6ca2ba" 0.158"""
+        cls.tmp_log_file = tempfile.NamedTemporaryFile(mode='w', delete=False)
+        cls.tmp_log_file.write(cls.log_file_str)
+        cls.tmp_log_file.close()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        os.remove(cls.tmp_log_file.name)
+
+    def test_read_one_correct_str(self):
+        """Проверяет корректность формата прочитанной строки"""
+        res_gen = read_log_line(self.tmp_log_file.name)
+        log_file_parts = self.log_file_str.split(' ')
+        for url, req_time in res_gen:
+            self.assertTrue(url == log_file_parts[7])
+            self.assertTrue(req_time == log_file_parts[-1])
+
+
+
+### ENDING TEST
 
 @micro_time_counter
 def main():
