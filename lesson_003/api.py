@@ -6,10 +6,12 @@ import json
 import datetime
 import logging
 import hashlib
+import re
 import uuid
 from optparse import OptionParser
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import scoring
+
+from custom_exceptions import FieldValidationError
 
 SALT = "Otus"
 ADMIN_LOGIN = "admin"
@@ -66,7 +68,12 @@ class ArgumentsField(CommonField):
 
 
 class EmailField(CharField):
-    pass
+
+    def __set__(self, instance, value):
+        if "@" in value:
+            super().__set__(instance, value)
+        else:
+            raise FieldValidationError("Email field doesn't contain '@'!")
 
 
 class PhoneField(CommonField):
@@ -74,6 +81,12 @@ class PhoneField(CommonField):
         super().__init__(required)
         self.nullable = nullable
 
+    def __set__(self, instance, value):
+        phone = re.compile(r'^7\d{10}')
+        if phone.match(str(value)):
+            super().__set__(instance, value)
+        else:
+            raise FieldValidationError("Phone must starting with '7' and contain 11 symbols")
 
 class DateField(CommonField):
     def __init__(self, required, nullable):
@@ -152,9 +165,9 @@ class MethodRequest(object):
 
 def check_auth(request):
     if request.is_admin:
-        digest = hashlib.sha512(datetime.datetime.now().strftime("%Y%m%d%H") + ADMIN_SALT).hexdigest()
+        digest = hashlib.sha512((datetime.datetime.now().strftime("%Y%m%d%H") + ADMIN_SALT).encode('utf-8')).hexdigest()
     else:
-        digest = hashlib.sha512(request.account + request.login + SALT).hexdigest()
+        digest = hashlib.sha512((request.account + request.login + SALT).encode('utf-8')).hexdigest()
     if digest == request.token:
         return True
     return False
@@ -162,12 +175,28 @@ def check_auth(request):
 
 def online_score_handler(request, ctx, store):
     #
+    OK_CODE = 200
+    FORBIDDEN_CODE = 403
+    UNPROCESSABLE_CODE = 422
+
     body = request['body']
     arguments = body['arguments']
-    client_request = OnlineScoreRequest(**arguments)
+    method_request = MethodRequest(account=body['account'],
+                                   login=body['login'],
+                                   token=body['token'],
+                                   arguments=arguments,
+                                   method=body['method'])
+    if not check_auth(method_request):
+        return {'error': 'Forbidden'}, FORBIDDEN_CODE
 
-    response = {'score': client_request.get_score()}
-    code = 200
+    try:
+        client_info = OnlineScoreRequest(**arguments)
+        response = {'score': client_info.get_score()}
+        code = OK_CODE
+    except FieldValidationError as err:
+        code = UNPROCESSABLE_CODE
+        response = {'error': err.msg}
+
 
     return response, code
 
@@ -178,6 +207,9 @@ def method_handler(request, ctx, store):
     В теле запроса передается имя метода в ключе 'method'
     Пример:  method: online_score
     """
+    if not request['body']:
+        return {'error': 'Empty request'}, 422
+
     method = request['body']['method']
     handlers_list = {'online_score': online_score_handler}
     try:
