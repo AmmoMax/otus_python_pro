@@ -31,7 +31,7 @@ class TestSuite(unittest.TestCase):
             request["token"] = hashlib.sha512(datetime.datetime.now().strftime("%Y%m%d%H") + api.ADMIN_SALT).hexdigest()
         else:
             msg = request.get("account", "") + request.get("login", "") + api.SALT
-            request["token"] = hashlib.sha512(msg).hexdigest()
+            request["token"] = hashlib.sha512(msg.encode('utf-8')).hexdigest()
 
     def test_empty_request(self):
         _, code = self.get_response({})
