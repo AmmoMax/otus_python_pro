@@ -60,6 +60,11 @@ class CharField(CommonField):
         super().__init__(required)
         self.nullable = nullable
 
+    def __set__(self, instance, value):
+        if value and not isinstance(value, str):
+            raise FieldValidationError(f'Field {self.pub_attr_name} must be str!')
+        super().__set__(instance, value)
+
 
 class ArgumentsField(CommonField):
     def __init__(self, required, nullable):
@@ -70,10 +75,9 @@ class ArgumentsField(CommonField):
 class EmailField(CharField):
 
     def __set__(self, instance, value):
-        if "@" in value:
-            super().__set__(instance, value)
-        else:
+        if value is not None and "@" not in value:
             raise FieldValidationError("Email field doesn't contain '@'!")
+        super().__set__(instance, value)
 
 
 class PhoneField(CommonField):
@@ -83,10 +87,10 @@ class PhoneField(CommonField):
 
     def __set__(self, instance, value):
         phone = re.compile(r'^7\d{10}')
-        if phone.match(str(value)):
-            super().__set__(instance, value)
-        else:
+        if value is not None and not phone.match(str(value)):
             raise FieldValidationError("Phone must starting with '7' and contain 11 symbols")
+        super().__set__(instance, value)
+
 
 class DateField(CommonField):
     def __init__(self, required, nullable):
@@ -123,7 +127,13 @@ class OnlineScoreRequest(object):
     birthday = BirthDayField(required=False, nullable=True)
     gender = GenderField(required=False, nullable=True)
 
-    def __init__(self, first_name, last_name, email, phone, birthday, gender):
+    def __init__(self,
+                 first_name=None,
+                 last_name=None,
+                 email=None,
+                 phone=None,
+                 birthday=None,
+                 gender=None):
         self.first_name = first_name
         self.last_name = last_name
         self.email = email
