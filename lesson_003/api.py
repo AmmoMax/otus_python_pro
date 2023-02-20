@@ -10,6 +10,7 @@ import re
 import uuid
 from optparse import OptionParser
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from time import strptime
 
 from custom_exceptions import FieldValidationError
 
@@ -103,11 +104,33 @@ class BirthDayField(CommonField):
         super().__init__(required)
         self.nullable = nullable
 
+    def __set__(self, instance, value):
+        date_fmt = "%d.%m.%Y"
+        DAYS_IN_YEAR = 365.2425
+        MAX_AGE = 70
+
+        now = datetime.datetime.now()
+        if value:
+            try:
+                birthday = datetime.datetime.strptime(value, date_fmt)
+            except ValueError:
+                raise FieldValidationError(f"Invalid {self.pub_attr_name} field. It must be in 'MM.DD.YYYY' format!")
+
+            delta = now - birthday
+            if delta.days / DAYS_IN_YEAR >= MAX_AGE:
+                raise FieldValidationError(f"Invalid {self.pub_attr_name} field. You age should not be more than 70")
+        super().__set__(instance, value)
 
 class GenderField(CommonField):
     def __init__(self, required, nullable):
         super().__init__(required)
         self.nullable = nullable
+
+    def __set__(self, instance, value):
+        AVAILABLE_GENDERS_CODE = [0, 1, 2]
+        if value and value not in AVAILABLE_GENDERS_CODE:
+            raise FieldValidationError(f"Invalid field {self.pub_attr_name}. Available values: 0, 1, 2")
+        super().__set__(instance, value)
 
 
 class ClientIDsField(CommonField):
