@@ -142,7 +142,8 @@ class ClientsInterestsRequest(object):
     date = DateField(required=False, nullable=True)
 
 
-class OnlineScoreRequest(object):
+class OnlineScoreRequest():
+
     first_name = CharField(required=False, nullable=True)
     last_name = CharField(required=False, nullable=True)
     email = EmailField(required=False, nullable=True)
@@ -163,6 +164,19 @@ class OnlineScoreRequest(object):
         self.phone = phone
         self.birthday = birthday
         self.gender = gender
+
+        if not self.__validation_fields():
+            raise FieldValidationError("Invalid number of fields! "
+                                       "You must pass at least one pair of attrs: phone-email, first_name-last_name, gender-birthday")
+
+    def __validation_fields(self):
+        if (self.phone and self.email) is not None:
+            return True
+        if (self.first_name and self.last_name) is not None:
+            return True
+        if (self.gender and self.birthday) is not None:
+            return True
+        return False
 
     def get_score(self):
         self.score = 0
@@ -207,10 +221,6 @@ def check_auth(request):
 
 
 def online_score_handler(request, ctx, store):
-    #
-    OK_CODE = 200
-    FORBIDDEN_CODE = 403
-    UNPROCESSABLE_CODE = 422
 
     body = request['body']
     arguments = body['arguments']
@@ -220,17 +230,15 @@ def online_score_handler(request, ctx, store):
                                    arguments=arguments,
                                    method=body['method'])
     if not check_auth(method_request):
-        return {'error': 'Forbidden'}, FORBIDDEN_CODE
+        return {'error': 'Forbidden'}, FORBIDDEN
 
     try:
         client_info = OnlineScoreRequest(**arguments)
         response = {'score': client_info.get_score()}
-        code = OK_CODE
+        code = OK
     except FieldValidationError as err:
-        code = UNPROCESSABLE_CODE
+        code = INVALID_REQUEST
         response = {'error': err.msg}
-
-
     return response, code
 
 
@@ -241,7 +249,7 @@ def method_handler(request, ctx, store):
     Пример:  method: online_score
     """
     if not request['body']:
-        return {'error': 'Empty request'}, 422
+        return {'error': 'Empty request'}, INVALID_REQUEST
 
     method = request['body']['method']
     handlers_list = {'online_score': online_score_handler}
@@ -249,7 +257,7 @@ def method_handler(request, ctx, store):
         response, code = handlers_list[method](request, ctx, store)
     except KeyError:
         response = 'Method not found'
-        code = 404
+        code = NOT_FOUND
     return response, code
 
 
