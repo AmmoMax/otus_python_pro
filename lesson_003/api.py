@@ -198,12 +198,22 @@ class MethodRequest(object):
     arguments = ArgumentsField(required=True, nullable=True)
     method = CharField(required=True, nullable=False)
 
-    def __init__(self, account, login, token, arguments, method):
+    def __init__(self, login=None, token=None, arguments=None, method=None, account=None):
         self.account = account
         self.login = login
         self.token = token
         self.arguments = arguments
         self.method = method
+
+        self.__validation()
+
+    def __validation(self):
+        if self.login is None:
+            raise FieldValidationError("Param 'login' is required")
+        if self.arguments is None:
+            raise FieldValidationError("Param 'arguments' is required")
+
+
 
     @property
     def is_admin(self):
@@ -223,17 +233,17 @@ def check_auth(request):
 def online_score_handler(request, ctx, store):
 
     body = request['body']
-    arguments = body['arguments']
-    method_request = MethodRequest(account=body['account'],
-                                   login=body['login'],
-                                   token=body['token'],
-                                   arguments=arguments,
-                                   method=body['method'])
-    if not check_auth(method_request):
-        return {'error': 'Forbidden'}, FORBIDDEN
+    arguments = body.get('arguments', {})
+
 
     try:
+        method_request = MethodRequest(**body)
+        if not check_auth(method_request):
+            return {'error': 'Forbidden'}, FORBIDDEN
         client_info = OnlineScoreRequest(**arguments)
+
+        # добавляем в переданный контекст список полей полученных в запросе
+        ctx['has'] = [arg for arg in arguments]
         response = {'score': client_info.get_score()}
         code = OK
     except FieldValidationError as err:
@@ -242,7 +252,7 @@ def online_score_handler(request, ctx, store):
     return response, code
 
 
-def method_handler(request, ctx, store):
+def method_handler(request, ctx: dict, store):
     """Вызывает нужный обработчик для входящего метода в зависимости от запроса.
 
     В теле запроса передается имя метода в ключе 'method'
@@ -251,8 +261,10 @@ def method_handler(request, ctx, store):
     if not request['body']:
         return {'error': 'Empty request'}, INVALID_REQUEST
 
-    method = request['body']['method']
     handlers_list = {'online_score': online_score_handler}
+    method = request['body'].get('method')
+    if method is None:
+        return {"Param 'method' is required!"}, INVALID_REQUEST
     try:
         response, code = handlers_list[method](request, ctx, store)
     except KeyError:
