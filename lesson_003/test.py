@@ -28,7 +28,8 @@ class TestSuite(unittest.TestCase):
 
     def set_valid_auth(self, request):
         if request.get("login") == api.ADMIN_LOGIN:
-            request["token"] = hashlib.sha512(datetime.datetime.now().strftime("%Y%m%d%H") + api.ADMIN_SALT).hexdigest()
+            hashing_str = datetime.datetime.now().strftime("%Y%m%d%H") + api.ADMIN_SALT
+            request["token"] = hashlib.sha512(hashing_str.encode('utf-8')).hexdigest()
         else:
             msg = request.get("account", "") + request.get("login", "") + api.SALT
             request["token"] = hashlib.sha512(msg.encode('utf-8')).hexdigest()
