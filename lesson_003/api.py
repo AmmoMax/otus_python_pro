@@ -55,7 +55,6 @@ class CommonField:
         res = getattr(instance, self.priv_attr_name)
         return res
 
-
 class CharField(CommonField):
     def __init__(self, required, nullable):
         super().__init__(required)
@@ -66,12 +65,10 @@ class CharField(CommonField):
             raise FieldValidationError(f'Field {self.pub_attr_name} must be str!')
         super().__set__(instance, value)
 
-
 class ArgumentsField(CommonField):
     def __init__(self, required, nullable):
         super().__init__(required)
         self.nullable = nullable
-
 
 class EmailField(CharField):
 
@@ -79,7 +76,6 @@ class EmailField(CharField):
         if value is not None and "@" not in value:
             raise FieldValidationError("Email field doesn't contain '@'!")
         super().__set__(instance, value)
-
 
 class PhoneField(CommonField):
     def __init__(self, required, nullable):
@@ -92,11 +88,23 @@ class PhoneField(CommonField):
             raise FieldValidationError("Phone must starting with '7' and contain 11 symbols")
         super().__set__(instance, value)
 
-
 class DateField(CommonField):
     def __init__(self, required, nullable):
         super().__init__(required)
         self.nullable = nullable
+
+    def __set__(self, instance, value):
+        if self.required and value is None:
+            raise FieldValidationError(f"Field {self.pub_attr_name} is required")
+
+        if value is not None:
+            date_fmt = "%d.%m.%Y"
+            try:
+                datetime.datetime.strptime(value, date_fmt)
+            except ValueError:
+                raise FieldValidationError(f"Invalid {self.pub_attr_name} field. It must be in 'MM.DD.YYYY' format!")
+        super().__set__(instance, value)
+
 
 
 class BirthDayField(CommonField):
@@ -132,14 +140,23 @@ class GenderField(CommonField):
             raise FieldValidationError(f"Invalid field {self.pub_attr_name}. Available values: 0, 1, 2")
         super().__set__(instance, value)
 
-
 class ClientIDsField(CommonField):
-    pass
+    def __set__(self, instance, value):
+        if self.required and value is None:
+            raise FieldValidationError(f"Field {self.pub_attr_name} is required to define!")
+        if isinstance(value, list) and len(value) and all([isinstance(i, int) for i in value]):
+            super().__set__(instance, value)
+        else:
+            raise FieldValidationError(f"Field {self.pub_attr_name} is not valid format or empty!")
 
 
 class ClientsInterestsRequest(object):
     client_ids = ClientIDsField(required=True)
     date = DateField(required=False, nullable=True)
+
+    def __init__(self, client_ids=None, date=None):
+        self.client_ids = client_ids
+        self.date = date
 
 
 class OnlineScoreRequest():
@@ -214,7 +231,6 @@ class MethodRequest(object):
             raise FieldValidationError("Param 'arguments' is required")
 
 
-
     @property
     def is_admin(self):
         return self.login == ADMIN_LOGIN
@@ -222,9 +238,10 @@ class MethodRequest(object):
 
 def check_auth(request):
     if request.is_admin:
-        digest = hashlib.sha512((datetime.datetime.now().strftime("%Y%m%d%H") + ADMIN_SALT).encode('utf-8')).hexdigest()
+        hashing_str = datetime.datetime.now().strftime("%Y%m%d%H") + ADMIN_SALT
     else:
-        digest = hashlib.sha512((request.account + request.login + SALT).encode('utf-8')).hexdigest()
+        hashing_str = request.account + request.login + SALT
+    digest = hashlib.sha512(hashing_str.encode('utf-8')).hexdigest()
     if digest == request.token:
         return True
     return False
@@ -235,15 +252,17 @@ def online_score_handler(request, ctx, store):
     body = request['body']
     arguments = body.get('arguments', {})
 
-
     try:
         method_request = MethodRequest(**body)
         if not check_auth(method_request):
             return {'error': 'Forbidden'}, FORBIDDEN
+        if method_request.is_admin:
+            return {'score': 42}, OK
         client_info = OnlineScoreRequest(**arguments)
 
         # добавляем в переданный контекст список полей полученных в запросе
         ctx['has'] = [arg for arg in arguments]
+
         response = {'score': client_info.get_score()}
         code = OK
     except FieldValidationError as err:
@@ -251,6 +270,23 @@ def online_score_handler(request, ctx, store):
         response = {'error': err.msg}
     return response, code
 
+def clients_interests_handler(request, ctx, store):
+    body = request['body']
+    arguments = body.get('arguments', {})
+
+    try:
+        method_request = MethodRequest(**body)
+        if not check_auth(method_request):
+            return {'error': 'Forbidden'}, FORBIDDEN
+
+        clients_interests = ClientsInterestsRequest(**arguments)
+        code = OK
+        response = {''}
+
+    except FieldValidationError as err:
+        code = INVALID_REQUEST
+        response = {'error', err.msg}
+    return response, code
 
 def method_handler(request, ctx: dict, store):
     """Вызывает нужный обработчик для входящего метода в зависимости от запроса.
@@ -261,7 +297,8 @@ def method_handler(request, ctx: dict, store):
     if not request['body']:
         return {'error': 'Empty request'}, INVALID_REQUEST
 
-    handlers_list = {'online_score': online_score_handler}
+    handlers_list = {'online_score': online_score_handler,
+                     'clients_interests': clients_interests_handler}
     method = request['body'].get('method')
     if method is None:
         return {"Param 'method' is required!"}, INVALID_REQUEST
