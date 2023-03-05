@@ -10,6 +10,7 @@ import re
 import uuid
 from optparse import OptionParser
 from http.server import HTTPServer, BaseHTTPRequestHandler
+import random
 from time import strptime
 
 from custom_exceptions import FieldValidationError
@@ -158,6 +159,10 @@ class ClientsInterestsRequest(object):
         self.client_ids = client_ids
         self.date = date
 
+    def get_interests(self):
+        interests = ["cars", "pets", "travel", "hi-tech", "sport", "music", "books", "tv", "cinema", "geek", "otus"]
+        return random.sample(interests, 2)
+
 
 class OnlineScoreRequest():
 
@@ -281,11 +286,16 @@ def clients_interests_handler(request, ctx, store):
 
         clients_interests = ClientsInterestsRequest(**arguments)
         code = OK
-        response = {''}
 
     except FieldValidationError as err:
         code = INVALID_REQUEST
         response = {'error', err.msg}
+    else:
+        response = dict()
+        for client in clients_interests.client_ids:
+            interests = clients_interests.get_interests()
+            response[client] = interests
+        ctx['nclients'] = len(clients_interests.client_ids)
     return response, code
 
 def method_handler(request, ctx: dict, store):
