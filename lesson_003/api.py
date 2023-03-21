@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import abc
 import json
 import datetime
 import logging
@@ -11,7 +10,6 @@ import uuid
 from optparse import OptionParser
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import random
-from time import strptime
 
 from custom_exceptions import FieldValidationError
 
@@ -64,6 +62,8 @@ class CharField(CommonField):
     def __set__(self, instance, value):
         if value and not isinstance(value, str):
             raise FieldValidationError(f'Field {self.pub_attr_name} must be str!')
+        if self.required and value is None:
+            raise FieldValidationError(f"Field {self.pub_attr_name} is required!")
         super().__set__(instance, value)
 
 class ArgumentsField(CommonField):
@@ -226,14 +226,6 @@ class MethodRequest(object):
         self.token = token
         self.arguments = arguments
         self.method = method
-
-        self.__validation()
-
-    def __validation(self):
-        if self.login is None:
-            raise FieldValidationError("Param 'login' is required")
-        if self.arguments is None:
-            raise FieldValidationError("Param 'arguments' is required")
 
 
     @property
